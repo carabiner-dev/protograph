@@ -1,17 +1,17 @@
 package render
 
 import (
-	"io"
-
+	"github.com/carabiner-dev/protograph/options"
 	"github.com/protobom/protobom/pkg/sbom"
 )
 
 type NodeListRender interface {
-	RenderNodeList(io.Writer, *sbom.NodeList) error
+	RenderNodeList(options.Options, *sbom.NodeList) error
 }
 
 type NodeRenderer interface {
-	RenderNode(io.Writer, *sbom.Node, NodeGraphInfo) error
+	RenderNode(options.Options, *sbom.Node, NodeGraphInfo) error
+	DefaultOptions() any
 }
 
 type NodeGraphInfo struct {

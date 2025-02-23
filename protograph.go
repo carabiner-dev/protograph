@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/carabiner-dev/protograph/options"
 	"github.com/carabiner-dev/protograph/render"
 	"github.com/carabiner-dev/protograph/renderers/tty"
 	"github.com/protobom/protobom/pkg/sbom"
@@ -15,27 +16,22 @@ import (
 type ProtoGraph struct {
 	Output       io.Writer
 	nodeRenderer render.NodeRenderer
-	Options      Options
-}
-
-type Options struct {
-	SortPackagesFiles bool
-	RenderFiles       bool
-	RenderPackages    bool
-}
-
-var defaultOptions = Options{
-	SortPackagesFiles: true,
-	RenderFiles:       true,
-	RenderPackages:    true,
+	Options      options.Options
 }
 
 // New returns a new protograph object
 func New() *ProtoGraph {
+	renderer := tty.New()
+
+	// Initialize with the default options
+	opts := options.Default
+	// and the chosen renderer options
+	opts.RendererOptions = renderer.DefaultOptions()
+
 	return &ProtoGraph{
-		nodeRenderer: tty.New(),
+		nodeRenderer: renderer,
 		Output:       os.Stdout,
-		Options:      defaultOptions,
+		Options:      opts,
 	}
 }
 
@@ -67,7 +63,7 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 	// Get the node descendants using the protobom API
 	rootInfo.Descendants = nl.NodeDescendants(root.Id, 1)
 
-	if err := graph.nodeRenderer.RenderNode(graph.Output, root, rootInfo); err != nil {
+	if err := graph.nodeRenderer.RenderNode(graph.Options, root, rootInfo); err != nil {
 		return err
 	}
 	if len(rootInfo.Descendants.Edges) == 0 {

@@ -2,18 +2,16 @@ package tty
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/protobom/protobom/pkg/sbom"
 
+	"github.com/carabiner-dev/protograph/options"
 	"github.com/carabiner-dev/protograph/render"
 )
 
 func New() *Renderer {
-	return &Renderer{
-		Options: defaultOptions,
-	}
+	return &Renderer{}
 }
 
 var defaultOptions = Options{
@@ -28,11 +26,23 @@ type Options struct {
 	Indent          int
 }
 
-type Renderer struct {
-	Options
+type Renderer struct{}
+
+// DefaultOptions returns the default options of the renderer
+func (r *Renderer) DefaultOptions() any {
+	return defaultOptions
 }
 
-func (r *Renderer) RenderNode(w io.Writer, node *sbom.Node, info render.NodeGraphInfo) error {
+// RenderNode renders a node to the terminal
+func (r *Renderer) RenderNode(opts options.Options, node *sbom.Node, info render.NodeGraphInfo) error {
+	if opts.Output == nil {
+		return fmt.Errorf("no output writer defined")
+	}
+
+	localopts, ok := opts.RendererOptions.(Options)
+	if !ok {
+		localopts = defaultOptions
+	}
 	s := string(node.Purl())
 	if s == "" {
 		s = node.Name
@@ -44,14 +54,14 @@ func (r *Renderer) RenderNode(w io.Writer, node *sbom.Node, info render.NodeGrap
 		// │  │  ├ CONTAINS PACKAGE
 		// │  │  └ CONTAINS PACKAGE
 		//
-		branchPrefix := strings.Repeat(" ", r.Options.Indent)
-		if r.Options.RenderAsciiTree {
+		branchPrefix := strings.Repeat(" ", localopts.Indent)
+		if localopts.RenderAsciiTree {
 			branchPrefix += "│ "
 		}
 		prefix = strings.Repeat(branchPrefix, info.Depth-1)
-		prefix += strings.Repeat(" ", r.Options.Indent)
+		prefix += strings.Repeat(" ", localopts.Indent)
 
-		if r.Options.RenderAsciiTree {
+		if localopts.RenderAsciiTree {
 			if info.IsLast {
 				prefix += "└ "
 			} else {
@@ -60,7 +70,7 @@ func (r *Renderer) RenderNode(w io.Writer, node *sbom.Node, info render.NodeGrap
 		}
 	}
 
-	if _, err := fmt.Fprintf(w, "%s%s\n", prefix, s); err != nil {
+	if _, err := fmt.Fprintf(opts.Output, "%s%s\n", prefix, s); err != nil {
 		return fmt.Errorf("writing to output: %w", err)
 	}
 	return nil
