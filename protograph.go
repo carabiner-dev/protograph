@@ -59,23 +59,30 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		return nil
 	}
 
-	for i, id := range rootInfo.Descendants.Edges[0].To {
+	// Create a new node ID filtering out those we've already seen
+	newlist := []string{}
+	for _, id := range rootInfo.Descendants.Edges[0].To {
+		// This circular refernce should not exist but ¯\_(ツ)_/¯
 		if id == root.Id {
 			continue
 		}
+		if _, ok := (*seen)[id]; ok {
+			continue
+		}
+		newlist = append(newlist, id)
+	}
 
+	for i, id := range newlist {
 		info := render.NodeGraphInfo{
 			Ancestor: root,
 			Depth:    rootInfo.Depth + 1,
 			IsFirst:  i == 0,
-			IsLast:   i == len(rootInfo.Descendants.Edges[0].To)-1,
-		}
-
-		if _, ok := (*seen)[id]; ok {
-			continue
+			IsLast:   i == len(newlist)-1,
 		}
 
 		node := nl.GetNodeByID(id)
+
+		// Add to the nodes we've seen
 		(*seen)[id] = struct{}{}
 		if err := graph.graphNodeAndRecurse(nl, node, seen, info); err != nil {
 			return err
