@@ -11,19 +11,56 @@ import (
 )
 
 func New() *Renderer {
-	return &Renderer{}
+	return &Renderer{
+		Options: defaultOptions,
+	}
+}
+
+var defaultOptions = Options{
+	RenderAsciiTree: true,
+	Indent:          2,
 }
 
 var _ render.NodeRenderer = (*Renderer)(nil)
 
-type Renderer struct{}
+type Options struct {
+	RenderAsciiTree bool
+	Indent          int
+}
+
+type Renderer struct {
+	Options
+}
 
 func (r *Renderer) RenderNode(w io.Writer, node *sbom.Node, info render.NodeGraphInfo) error {
 	s := string(node.Purl())
 	if s == "" {
 		s = node.Name
 	}
-	if _, err := fmt.Fprintln(w, strings.Repeat(" ", info.Depth)+s+fmt.Sprintf(" (%d descendants)", len(info.Descendants.Nodes)-1)); err != nil {
+	prefix := ""
+	if info.Depth > 0 {
+		// This renders a tree branch, optionally with ascii lines:
+		//
+		// │  │  ├ CONTAINS PACKAGE
+		// │  │  └ CONTAINS PACKAGE
+		//
+		branchPrefix := strings.Repeat(" ", r.Options.Indent)
+		if r.Options.RenderAsciiTree {
+			branchPrefix += "│ "
+		}
+		prefix = strings.Repeat(branchPrefix, info.Depth-1)
+		prefix += strings.Repeat(" ", r.Options.Indent)
+
+		if r.Options.RenderAsciiTree {
+			if info.IsLast {
+				prefix += "└ "
+			} else {
+				prefix += "├ "
+			}
+		}
+	}
+
+	if _, err := fmt.Fprintf(w, "%s%s (%d)\n", prefix, s, info.Depth); err != nil {
 		return fmt.Errorf("writing to output: %w", err)
 	}
 	return nil
