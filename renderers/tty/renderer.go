@@ -60,7 +60,7 @@ func (r *Renderer) RenderNode(w io.Writer, node *sbom.Node, info render.NodeGrap
 		}
 	}
 
-	if _, err := fmt.Fprintf(w, "%s%s (%d)\n", prefix, s, info.Depth); err != nil {
+	if _, err := fmt.Fprintf(w, "%s%s\n", prefix, s); err != nil {
 		return fmt.Errorf("writing to output: %w", err)
 	}
 	return nil

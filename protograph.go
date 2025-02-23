@@ -3,6 +3,7 @@ package protograph
 import (
 	"io"
 	"os"
+	"slices"
 
 	"github.com/carabiner-dev/protograph/render"
 	"github.com/carabiner-dev/protograph/renderers/tty"
@@ -12,8 +13,21 @@ import (
 // ProtoGraph is a library that renders protobom data to an io.Writer
 // using a configurable renderer.
 type ProtoGraph struct {
-	nodeRenderer render.NodeRenderer
 	Output       io.Writer
+	nodeRenderer render.NodeRenderer
+	Options      Options
+}
+
+type Options struct {
+	SortPackagesFiles bool
+	RenderFiles       bool
+	RenderPackages    bool
+}
+
+var defaultOptions = Options{
+	SortPackagesFiles: true,
+	RenderFiles:       true,
+	RenderPackages:    true,
 }
 
 // New returns a new protograph object
@@ -21,6 +35,7 @@ func New() *ProtoGraph {
 	return &ProtoGraph{
 		nodeRenderer: tty.New(),
 		Output:       os.Stdout,
+		Options:      defaultOptions,
 	}
 }
 
@@ -60,6 +75,7 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 	}
 
 	// Create a new node ID filtering out those we've already seen
+	// and those types that options command not to render
 	newlist := []string{}
 	for _, id := range rootInfo.Descendants.Edges[0].To {
 		// This circular refernce should not exist but ¯\_(ツ)_/¯
@@ -69,7 +85,38 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		if _, ok := (*seen)[id]; ok {
 			continue
 		}
+
+		// Any ID in the edges not found on the graph we skip
+		node := nl.GetNodeByID(id)
+		if node == nil {
+			continue
+		}
+
+		if node.GetType() == sbom.Node_FILE && !graph.Options.RenderFiles {
+			continue
+		} else if node.GetType() == sbom.Node_PACKAGE && !graph.Options.RenderPackages {
+			continue
+		}
+
 		newlist = append(newlist, id)
+	}
+
+	if graph.Options.SortPackagesFiles {
+		slices.SortFunc(newlist, func(a, b string) int {
+			nodeA := nl.GetNodeByID(a)
+			nodeB := nl.GetNodeByID(b)
+
+			switch {
+			case nodeA.GetType() == nodeB.GetType():
+				return 0
+			case nodeA.GetType() == sbom.Node_PACKAGE:
+				return -1
+			case nodeB.GetType() == sbom.Node_PACKAGE:
+				return 1
+			default:
+				return 0
+			}
+		})
 	}
 
 	for i, id := range newlist {
