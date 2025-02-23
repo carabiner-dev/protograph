@@ -5,33 +5,35 @@ import (
 	"os"
 
 	"github.com/carabiner-dev/protograph/render"
-	"github.com/carabiner-dev/protograph/renderers/tty.go"
+	"github.com/carabiner-dev/protograph/renderers/tty"
 	"github.com/protobom/protobom/pkg/sbom"
 )
 
 // ProtoGraph is a library that renders protobom data to an io.Writer
 // using a configurable renderer.
 type ProtoGraph struct {
-	Renderer render.Renderer
-	Output   io.Writer
+	nodeRenderer render.NodeRenderer
+	Output       io.Writer
 }
 
 // New returns a new protograph object
 func New() *ProtoGraph {
 	return &ProtoGraph{
-		Renderer: tty.New(),
-		Output:   os.Stdout,
+		nodeRenderer: tty.New(),
+		Output:       os.Stdout,
 	}
 }
 
 // GraphNodeList draws a NodeList using the configured Renderer
 func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
 	for i, id := range nl.RootElements {
+
 		err := graph.graphNodeAndRecurse(nl, nl.GetNodeByID(id), &map[string]struct{}{}, render.NodeGraphInfo{
-			Ancestor: nil,
-			Depth:    0,
-			IsFirst:  i == 0,
-			IsLast:   i == len(nl.RootElements)-1,
+			Ancestor:    nil,
+			Descendants: nl.NodeDescendants(id, 1),
+			Depth:       0,
+			IsFirst:     i == 0,
+			IsLast:      i == len(nl.RootElements)-1,
 		})
 		if err != nil {
 			return err
@@ -48,16 +50,16 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 	rootInfo render.NodeGraphInfo,
 ) error {
 	// Get the node descendants using the protobom API
-	descendants := nl.NodeDescendants(root.Id, 1)
+	rootInfo.Descendants = nl.NodeDescendants(root.Id, 1)
 
-	if err := graph.Renderer.RenderNode(graph.Output, root, rootInfo); err != nil {
+	if err := graph.nodeRenderer.RenderNode(graph.Output, root, rootInfo); err != nil {
 		return err
 	}
-	if len(descendants.Edges) == 0 {
+	if len(rootInfo.Descendants.Edges) == 0 {
 		return nil
 	}
 
-	for i, id := range descendants.Edges[0].To {
+	for i, id := range rootInfo.Descendants.Edges[0].To {
 		if id == root.Id {
 			continue
 		}
@@ -66,7 +68,7 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 			Ancestor: root,
 			Depth:    rootInfo.Depth + 1,
 			IsFirst:  i == 0,
-			IsLast:   i == len(descendants.Edges[0].To)-1,
+			IsLast:   i == len(rootInfo.Descendants.Edges[0].To)-1,
 		}
 
 		if _, ok := (*seen)[id]; ok {
