@@ -37,9 +37,13 @@ func New() *ProtoGraph {
 
 // GraphNodeList draws a NodeList using the configured Renderer
 func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
-	for i, id := range nl.RootElements {
+	// Global map to track nodes that have had their children rendered (used when FullTree is false)
+	rendered := make(map[string]struct{})
 
-		err := graph.graphNodeAndRecurse(nl, nl.GetNodeByID(id), &map[string]struct{}{}, render.NodeGraphInfo{
+	for i, id := range nl.RootElements {
+		// Start with ancestors containing the root node to prevent cycles back to it
+		ancestors := map[string]struct{}{id: {}}
+		err := graph.graphNodeAndRecurse(nl, nl.GetNodeByID(id), ancestors, rendered, render.NodeGraphInfo{
 			Ancestor:    nil,
 			Descendants: nl.NodeDescendants(id, 1),
 			Depth:       0,
@@ -54,10 +58,13 @@ func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
 }
 
 // graphNodeAndRecurse draws a node and recurses down to its descendants
+// ancestors: tracks nodes in the current path (for cycle prevention, per-branch)
+// rendered: tracks nodes whose children have been rendered (global, used when FullTree is false)
 func (graph *ProtoGraph) graphNodeAndRecurse(
 	nl *sbom.NodeList,
 	root *sbom.Node,
-	seen *map[string]struct{},
+	ancestors map[string]struct{},
+	rendered map[string]struct{},
 	rootInfo render.NodeGraphInfo,
 ) error {
 	// Get the node descendants using the protobom API
@@ -70,15 +77,25 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		return nil
 	}
 
-	// Create a new node ID filtering out those we've already seen
+	// When FullTree is false, skip children if this node has already been rendered with children
+	if !graph.Options.FullTree {
+		if _, alreadyRendered := rendered[root.Id]; alreadyRendered {
+			return nil
+		}
+		// Mark this node as having its children rendered
+		rendered[root.Id] = struct{}{}
+	}
+
+	// Create a new node ID filtering out ancestors (to prevent cycles)
 	// and those types that options command not to render
 	newlist := []string{}
 	for _, id := range rootInfo.Descendants.Edges[0].To {
-		// This circular refernce should not exist but ¯\_(ツ)_/¯
+		// Skip circular references to self
 		if id == root.Id {
 			continue
 		}
-		if _, ok := (*seen)[id]; ok {
+		// Skip if this node is an ancestor (would create a cycle)
+		if _, isAncestor := ancestors[id]; isAncestor {
 			continue
 		}
 
@@ -125,9 +142,15 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 
 		node := nl.GetNodeByID(id)
 
-		// Add to the nodes we've seen
-		(*seen)[id] = struct{}{}
-		if err := graph.graphNodeAndRecurse(nl, node, seen, info); err != nil {
+		// Create a new ancestors map for this branch including the current node
+		// This allows nodes to appear in multiple branches while preventing cycles
+		childAncestors := make(map[string]struct{}, len(ancestors)+1)
+		for k := range ancestors {
+			childAncestors[k] = struct{}{}
+		}
+		childAncestors[id] = struct{}{}
+
+		if err := graph.graphNodeAndRecurse(nl, node, childAncestors, rendered, info); err != nil {
 			return err
 		}
 	}
