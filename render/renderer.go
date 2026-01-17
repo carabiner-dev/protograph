@@ -15,9 +15,10 @@ type NodeRenderer interface {
 }
 
 type NodeGraphInfo struct {
-	Ancestor    *sbom.Node
-	Descendants *sbom.NodeList
-	Depth       int
-	IsFirst     bool
-	IsLast      bool
+	Ancestor        *sbom.Node
+	Descendants     *sbom.NodeList
+	Depth           int
+	IsFirst         bool
+	IsLast          bool
+	ChildrenSkipped bool // True when this node has children but they were already rendered elsewhere
 }

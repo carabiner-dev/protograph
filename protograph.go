@@ -70,18 +70,28 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 	// Get the node descendants using the protobom API
 	rootInfo.Descendants = nl.NodeDescendants(root.Id, 1)
 
+	// Check if this node has children that will be skipped (already rendered elsewhere)
+	hasChildren := len(rootInfo.Descendants.Edges) > 0 && len(rootInfo.Descendants.Edges[0].To) > 0
+	skipChildren := false
+	if !graph.Options.FullTree && hasChildren {
+		if _, alreadyRendered := rendered[root.Id]; alreadyRendered {
+			skipChildren = true
+			rootInfo.ChildrenSkipped = true
+		}
+	}
+
 	if err := graph.nodeRenderer.RenderNode(graph.Options, root, rootInfo); err != nil {
 		return err
 	}
-	if len(rootInfo.Descendants.Edges) == 0 {
+	if !hasChildren {
 		return nil
 	}
 
 	// When FullTree is false, skip children if this node has already been rendered with children
+	if skipChildren {
+		return nil
+	}
 	if !graph.Options.FullTree {
-		if _, alreadyRendered := rendered[root.Id]; alreadyRendered {
-			return nil
-		}
 		// Mark this node as having its children rendered
 		rendered[root.Id] = struct{}{}
 	}

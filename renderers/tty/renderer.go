@@ -70,7 +70,13 @@ func (r *Renderer) RenderNode(opts options.Options, node *sbom.Node, info render
 		}
 	}
 
-	if _, err := fmt.Fprintf(opts.Output, "%s%s\n", prefix, s); err != nil {
+	// Add indicator when children were skipped (already rendered elsewhere)
+	suffix := ""
+	if info.ChildrenSkipped {
+		suffix = " ⤓"
+	}
+
+	if _, err := fmt.Fprintf(opts.Output, "%s%s%s\n", prefix, s, suffix); err != nil {
 		return fmt.Errorf("writing to output: %w", err)
 	}
 	return nil
