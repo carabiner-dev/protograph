@@ -35,6 +35,16 @@ func New() *ProtoGraph {
 	}
 }
 
+// SetRenderer swaps the NodeRenderer used to draw the graph. It also resets
+// the renderer-specific options (Options.RendererOptions) to the new renderer's
+// defaults so the graph is immediately usable with the injected renderer.
+// Callers that need custom renderer options should set Options.RendererOptions
+// after calling SetRenderer.
+func (graph *ProtoGraph) SetRenderer(r render.NodeRenderer) {
+	graph.nodeRenderer = r
+	graph.Options.RendererOptions = r.DefaultOptions()
+}
+
 // GraphNodeList draws a NodeList using the configured Renderer
 func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
 	// Global map to track nodes that have had their children rendered (used when FullTree is false)
