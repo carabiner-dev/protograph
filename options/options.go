@@ -6,6 +6,9 @@ import (
 )
 
 type Options struct {
+	// SortPackagesFiles walks a node's packages before its files. Within
+	// each, and without it across both, siblings are walked by name, then
+	// version, then id: always the same order for the same graph.
 	SortPackagesFiles bool
 	RenderFiles       bool
 	RenderPackages    bool

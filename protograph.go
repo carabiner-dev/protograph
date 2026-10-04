@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/carabiner-dev/protograph/options"
 	"github.com/carabiner-dev/protograph/render"
@@ -106,9 +107,9 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		rendered[root.Id] = struct{}{}
 	}
 
-	// Create a new node ID filtering out ancestors (to prevent cycles)
-	// and those types that options command not to render
-	newlist := []string{}
+	// Collect the children to walk, filtering out ancestors (to prevent
+	// cycles) and those types that options command not to render
+	children := []*sbom.Node{}
 	for _, id := range rootInfo.Descendants.Edges[0].To {
 		// Skip circular references to self
 		if id == root.Id {
@@ -131,36 +132,26 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 			continue
 		}
 
-		newlist = append(newlist, id)
+		children = append(children, node)
 	}
 
-	if graph.Options.SortPackagesFiles {
-		slices.SortFunc(newlist, func(a, b string) int {
-			nodeA := nl.GetNodeByID(a)
-			nodeB := nl.GetNodeByID(b)
+	// Walk the children in a fixed order. protobom gathers a node's
+	// descendants through a map, so they arrive in a different order on
+	// every call; walked as they come, the same document would be drawn
+	// differently each time, and a node reached through several parents
+	// would be expanded under a different one (it is expanded where it is
+	// first met). Ordering them makes a graph draw the same way every time.
+	slices.SortFunc(children, func(a, b *sbom.Node) int {
+		return compareNodes(a, b, graph.Options.SortPackagesFiles)
+	})
 
-			switch {
-			case nodeA.GetType() == nodeB.GetType():
-				return 0
-			case nodeA.GetType() == sbom.Node_PACKAGE:
-				return -1
-			case nodeB.GetType() == sbom.Node_PACKAGE:
-				return 1
-			default:
-				return 0
-			}
-		})
-	}
-
-	for i, id := range newlist {
+	for i, node := range children {
 		info := render.NodeGraphInfo{
 			Ancestor: root,
 			Depth:    rootInfo.Depth + 1,
 			IsFirst:  i == 0,
-			IsLast:   i == len(newlist)-1,
+			IsLast:   i == len(children)-1,
 		}
-
-		node := nl.GetNodeByID(id)
 
 		// Create a new ancestors map for this branch including the current node
 		// This allows nodes to appear in multiple branches while preventing cycles
@@ -168,11 +159,36 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		for k := range ancestors {
 			childAncestors[k] = struct{}{}
 		}
-		childAncestors[id] = struct{}{}
+		childAncestors[node.Id] = struct{}{}
 
 		if err := graph.graphNodeAndRecurse(nl, node, childAncestors, rendered, info); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// compareNodes orders two sibling nodes: by name without regard to case,
+// then by version, then by id, which no two nodes share, so the order is
+// total and the same on every run. With packagesFirst, packages come before
+// files whatever their names.
+func compareNodes(a, b *sbom.Node, packagesFirst bool) int {
+	if packagesFirst && a.GetType() != b.GetType() {
+		if a.GetType() == sbom.Node_PACKAGE {
+			return -1
+		}
+		if b.GetType() == sbom.Node_PACKAGE {
+			return 1
+		}
+	}
+	if c := strings.Compare(strings.ToLower(a.GetName()), strings.ToLower(b.GetName())); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.GetName(), b.GetName()); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.GetVersion(), b.GetVersion()); c != 0 {
+		return c
+	}
+	return strings.Compare(a.GetId(), b.GetId())
 }
