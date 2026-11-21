@@ -242,3 +242,103 @@ func TestCompareNodes(t *testing.T) {
 		}
 	}
 }
+
+// relate adds an edge of the given type to a node list.
+func relate(nl *sbom.NodeList, kind sbom.Edge_Type, from string, to ...string) {
+	nl.AddEdge(&sbom.Edge{Type: kind, From: from, To: to})
+}
+
+// protobom states many relationships from the owned node, as SPDX 2 does:
+// "lib DEPENDENCY_OF app". The tree hangs lib under app all the same.
+func TestInverseEdgesAreFollowedBackwards(t *testing.T) {
+	nl := graphOf(
+		[]*sbom.Node{
+			pkg("root", "app", ""), pkg("lib", "lib", ""), pkg("dev", "linter", ""),
+			pkg("deep", "deep", ""), pkg("tool", "compiler", ""), file("f", "main.go"),
+		},
+		// One forward edge, to show both kinds meet in one tree.
+		"dev deep",
+	)
+	relate(nl, sbom.Edge_dependencyOf, "lib", "root")
+	relate(nl, sbom.Edge_devDependency, "dev", "root")
+	relate(nl, sbom.Edge_buildTool, "tool", "root", "lib")
+	relate(nl, sbom.Edge_contained_by, "f", "root")
+
+	want := strings.Join([]string{
+		"root first last",
+		"  tool first",
+		"  lib",
+		"    tool first last",
+		"  dev",
+		"    deep first last",
+		"  f last",
+	}, "\n") + "\n"
+	for i := range 20 {
+		if got := walk(t, nl, nil); got != want {
+			t.Fatalf("walk %d:\n%s\nwant:\n%s", i+1, got, want)
+		}
+	}
+}
+
+// A pair of nodes related by several edges, one way round or the other, is
+// one parent and one child.
+func TestAChildIsListedOnce(t *testing.T) {
+	nl := graphOf(
+		[]*sbom.Node{pkg("root", "app", ""), pkg("lib", "lib", ""), pkg("leaf", "leaf", "")},
+		"root lib", "root lib", "lib leaf",
+	)
+	relate(nl, sbom.Edge_dependencyOf, "lib", "root")
+	relate(nl, sbom.Edge_runtimeDependency, "lib", "root")
+	relate(nl, sbom.Edge_contains, "root", "lib", "lib")
+
+	if got, want := walk(t, nl, nil), "root first last\n  lib first last\n    leaf first last\n"; got != want {
+		t.Errorf("walk:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// describing is a renderer that writes down the descendants each node is
+// rendered with.
+type describing struct {
+	lines []string
+}
+
+func (d *describing) DefaultOptions() any { return nil }
+
+func (d *describing) RenderNode(_ options.Options, n *sbom.Node, info render.NodeGraphInfo) error {
+	desc := info.Descendants
+	line := fmt.Sprintf("%s roots=%v nodes=%d", n.GetId(), desc.GetRootElements(), len(desc.GetNodes()))
+	for _, e := range desc.GetEdges() {
+		line += fmt.Sprintf(" %s>%s>%v", e.GetFrom(), e.GetType(), e.GetTo())
+	}
+	d.lines = append(d.lines, line)
+	return nil
+}
+
+// A renderer is handed each node with its children in the tree: the node as
+// the root of a small list, related to them by one ancestor edge. A leaf has
+// no edge at all.
+func TestDescendantsAreTheChildrenInTheTree(t *testing.T) {
+	nl := graphOf(
+		[]*sbom.Node{pkg("root", "app", ""), pkg("a", "alpha", ""), pkg("b", "beta", "")},
+		"root a", "root root", "root missing",
+	)
+	relate(nl, sbom.Edge_dependencyOf, "b", "root")
+
+	rec := &describing{}
+	g := New()
+	g.SetRenderer(rec)
+	if err := g.GraphNodeList(nl); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		// Neither the node itself nor a node the document lacks is a child.
+		"root roots=[root] nodes=3 root>ancestor>[a b]",
+		"a roots=[a] nodes=1",
+		// b states that it is a dependency of root, which does not make
+		// root its child.
+		"b roots=[b] nodes=1",
+	}, "\n")
+	if got := strings.Join(rec.lines, "\n"); got != want {
+		t.Errorf("descendants:\n%s\nwant:\n%s", got, want)
+	}
+}

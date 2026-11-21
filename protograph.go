@@ -50,16 +50,17 @@ func (graph *ProtoGraph) SetRenderer(r render.NodeRenderer) {
 func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
 	// Global map to track nodes that have had their children rendered (used when FullTree is false)
 	rendered := make(map[string]struct{})
+	// Who hangs under whom, with every edge read the right way round.
+	children := childIndex(nl)
 
 	for i, id := range nl.RootElements {
 		// Start with ancestors containing the root node to prevent cycles back to it
 		ancestors := map[string]struct{}{id: {}}
-		err := graph.graphNodeAndRecurse(nl, nl.GetNodeByID(id), ancestors, rendered, render.NodeGraphInfo{
-			Ancestor:    nil,
-			Descendants: nl.NodeDescendants(id, 1),
-			Depth:       0,
-			IsFirst:     i == 0,
-			IsLast:      i == len(nl.RootElements)-1,
+		err := graph.graphNodeAndRecurse(nl, nl.GetNodeByID(id), children, ancestors, rendered, render.NodeGraphInfo{
+			Ancestor: nil,
+			Depth:    0,
+			IsFirst:  i == 0,
+			IsLast:   i == len(nl.RootElements)-1,
 		})
 		if err != nil {
 			return err
@@ -68,21 +69,84 @@ func (graph *ProtoGraph) GraphNodeList(nl *sbom.NodeList) error {
 	return nil
 }
 
+// childIndex maps every node id to the ids of its children in the tree: the
+// destinations of its forward edges, plus the sources of the inverse edges
+// that point at it.
+//
+// protobom keeps the relationship names and directions of SPDX 2, which
+// states many of them from the owned node: "A DEPENDENCY_OF B", "A
+// CONTAINED_BY B" and "A BUILD_TOOL_OF B" all name the owner last. Followed
+// from source to destination, as any other edge, those would hang the owner
+// under what it owns, or leave a dependency out of the tree for want of an
+// edge leading to it. sbom.Edge_Type.Inverse says which types they are.
+//
+// A child is listed once under a parent, however many edges relate the two.
+func childIndex(nl *sbom.NodeList) map[string][]string {
+	children := map[string][]string{}
+	seen := map[[2]string]struct{}{}
+	add := func(parent, child string) {
+		pair := [2]string{parent, child}
+		if _, dup := seen[pair]; dup {
+			return
+		}
+		seen[pair] = struct{}{}
+		children[parent] = append(children[parent], child)
+	}
+	for _, e := range nl.GetEdges() {
+		for _, to := range e.GetTo() {
+			if e.GetType().Inverse() {
+				add(to, e.GetFrom())
+			} else {
+				add(e.GetFrom(), to)
+			}
+		}
+	}
+	return children
+}
+
+// descendants builds the NodeList handed to renderers as
+// NodeGraphInfo.Descendants: the node and its children in the tree, joined
+// by a single ancestor edge. It is the shape of protobom's
+// NodeList.NodeDescendants(id, 1), which the walk used to hand over.
+func descendants(nl *sbom.NodeList, node *sbom.Node, childIDs []string) *sbom.NodeList {
+	desc := &sbom.NodeList{
+		Nodes:        []*sbom.Node{node},
+		Edges:        []*sbom.Edge{},
+		RootElements: []string{node.GetId()},
+	}
+	edge := &sbom.Edge{Type: sbom.Edge_ancestor, From: node.GetId(), To: []string{}}
+	for _, id := range childIDs {
+		// A node is not its own descendant, and an edge may name a node
+		// the document does not have.
+		child := nl.GetNodeByID(id)
+		if child == nil || id == node.GetId() {
+			continue
+		}
+		desc.Nodes = append(desc.Nodes, child)
+		edge.To = append(edge.To, id)
+	}
+	if len(edge.To) > 0 {
+		desc.Edges = append(desc.Edges, edge)
+	}
+	return desc
+}
+
 // graphNodeAndRecurse draws a node and recurses down to its descendants
+// children: who hangs under whom in the tree (see childIndex)
 // ancestors: tracks nodes in the current path (for cycle prevention, per-branch)
 // rendered: tracks nodes whose children have been rendered (global, used when FullTree is false)
 func (graph *ProtoGraph) graphNodeAndRecurse(
 	nl *sbom.NodeList,
 	root *sbom.Node,
+	children map[string][]string,
 	ancestors map[string]struct{},
 	rendered map[string]struct{},
 	rootInfo render.NodeGraphInfo,
 ) error {
-	// Get the node descendants using the protobom API
-	rootInfo.Descendants = nl.NodeDescendants(root.Id, 1)
+	rootInfo.Descendants = descendants(nl, root, children[root.Id])
 
 	// Check if this node has children that will be skipped (already rendered elsewhere)
-	hasChildren := len(rootInfo.Descendants.Edges) > 0 && len(rootInfo.Descendants.Edges[0].To) > 0
+	hasChildren := len(rootInfo.Descendants.Edges) > 0
 	skipChildren := false
 	if !graph.Options.FullTree && hasChildren {
 		if _, alreadyRendered := rendered[root.Id]; alreadyRendered {
@@ -109,7 +173,7 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 
 	// Collect the children to walk, filtering out ancestors (to prevent
 	// cycles) and those types that options command not to render
-	children := []*sbom.Node{}
+	toWalk := []*sbom.Node{}
 	for _, id := range rootInfo.Descendants.Edges[0].To {
 		// Skip circular references to self
 		if id == root.Id {
@@ -132,25 +196,23 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 			continue
 		}
 
-		children = append(children, node)
+		toWalk = append(toWalk, node)
 	}
 
-	// Walk the children in a fixed order. protobom gathers a node's
-	// descendants through a map, so they arrive in a different order on
-	// every call; walked as they come, the same document would be drawn
-	// differently each time, and a node reached through several parents
-	// would be expanded under a different one (it is expanded where it is
-	// first met). Ordering them makes a graph draw the same way every time.
-	slices.SortFunc(children, func(a, b *sbom.Node) int {
+	// Walk the children in a fixed order, whatever order the document
+	// states its edges in: a graph draws the same way every time, and a
+	// node reached through several parents (it is expanded where it is
+	// first met) is always expanded under the same one.
+	slices.SortFunc(toWalk, func(a, b *sbom.Node) int {
 		return compareNodes(a, b, graph.Options.SortPackagesFiles)
 	})
 
-	for i, node := range children {
+	for i, node := range toWalk {
 		info := render.NodeGraphInfo{
 			Ancestor: root,
 			Depth:    rootInfo.Depth + 1,
 			IsFirst:  i == 0,
-			IsLast:   i == len(children)-1,
+			IsLast:   i == len(toWalk)-1,
 		}
 
 		// Create a new ancestors map for this branch including the current node
@@ -161,7 +223,7 @@ func (graph *ProtoGraph) graphNodeAndRecurse(
 		}
 		childAncestors[node.Id] = struct{}{}
 
-		if err := graph.graphNodeAndRecurse(nl, node, childAncestors, rendered, info); err != nil {
+		if err := graph.graphNodeAndRecurse(nl, node, children, childAncestors, rendered, info); err != nil {
 			return err
 		}
 	}
